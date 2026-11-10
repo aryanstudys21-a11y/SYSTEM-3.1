@@ -1,0 +1,6 @@
+streamlit
+streamlit-webrtc
+onnxruntime
+opencv-python-headless
+numpy
+pillow
