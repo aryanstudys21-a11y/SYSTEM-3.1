@@ -5,32 +5,31 @@ import numpy as np
 import onnxruntime as ort
 from PIL import Image
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
-import torch
-import torch.nn as nn
-from torchvision import models
 
 st.set_page_config(page_title="MORA Vu: Clinical Posture AI", layout="wide")
 
-# Automatically generate a fallback ONNX model if the file doesn't exist
 MODEL_PATH = "posture_cnn_griffin.onnx"
 
+# If the ONNX file doesn't exist, create a valid dummy ONNX file using raw ONNX API or skip export entirely
 if not os.path.exists(MODEL_PATH):
-    class FallbackPostureCNN(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.features = models.mobilenet_v3_small(weights=None).features
-            self.pool = nn.AdaptiveAvgPool2d((1, 1))
-            self.coord_head = nn.Sequential(nn.Linear(576, 256), nn.ReLU(), nn.Linear(256, 4), nn.Sigmoid())
-            self.class_head = nn.Sequential(nn.Linear(576, 128), nn.ReLU(), nn.Linear(128, 3))
-
-        def forward(self, x):
-            x = torch.flatten(self.pool(self.features(x)), 1)
-            return self.coord_head(x), self.class_head(x)
-
-    model = FallbackPostureCNN()
-    model.eval()
-    dummy_input = torch.randn(1, 3, 224, 224)
-    torch.onnx.export(model, dummy_input, MODEL_PATH, input_names=["input_frame"], output_names=["landmark_coords", "posture_logits"])
+    import onnx
+    from onnx import helper, TensorProto
+    
+    # Create a simple valid ONNX graph that outputs dummy coordinates and logits
+    X = helper.make_tensor_value_info('input_frame', TensorProto.FLOAT, [1, 3, 224, 224])
+    Y1 = helper.make_tensor_value_info('landmark_coords', TensorProto.FLOAT, [1, 4])
+    Y2 = helper.make_tensor_value_info('posture_logits', TensorProto.FLOAT, [1, 3])
+    
+    # Constant initializers for fallback output
+    const_coords = helper.make_tensor('const_coords', TensorProto.FLOAT, [1, 4], [0.3, 0.7, 0.4, 0.3])
+    const_logits = helper.make_tensor('const_logits', TensorProto.FLOAT, [1, 3], [2.0, 0.5, -1.0])
+    
+    node1 = helper.make_node('Constant', inputs=[], outputs=['landmark_coords'], value=const_coords)
+    node2 = helper.make_node('Constant', inputs=[], outputs=['posture_logits'], value=const_logits)
+    
+    graph = helper.make_graph([node1, node2], 'fallback_net', [X], [Y1, Y2])
+    model = helper.make_model(graph, producer_name='mora_fallback')
+    onnx.save(model, MODEL_PATH)
 
 @st.cache_resource
 def load_onnx_model():
@@ -109,7 +108,7 @@ class PostureVideoProcessor(VideoProcessorBase):
         return av.VideoFrame.from_ndarray(annotated_img, format="bgr24")
 
 st.title("MORA Vu: Clinical Posture & CVA Analyzer")
-st.markdown("Markerless Craniovertebral Angle (CVA) & Forward Head Posture tracking powered by ONNX[cite: 3].")
+st.markdown("Markerless Craniovertebral Angle (CVA) & Forward Head Posture tracking powered by ONNX.")
 
 tab1, tab2 = st.tabs(["Snapshot / Image Upload", "Live WebRTC Stream"])
 
@@ -139,5 +138,5 @@ with tab1:
             st.info("Capture or upload a side-profile photo to compute CVA.")
 
 with tab2:
-    st.markdown("Real-time webcam stream with automated ROI cropping[cite: 3].")
+    st.markdown("Real-time webcam stream with automated ROI cropping.")
     webrtc_streamer(key="posture-live", video_processor_factory=PostureVideoProcessor)
